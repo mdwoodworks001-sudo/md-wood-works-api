@@ -121,11 +121,22 @@ app.use(
       "http://localhost:4200",
       "http://localhost:5173",
     ],
+
     credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+
+    methods: [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ],
+
     allowedHeaders: [
       "Content-Type",
       "Authorization",
+      "x-user-id",
     ],
   }),
 );

@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { CategoryService } from "./category.service.js";
 import { param } from "../../common/utils/params.js";
 import { env } from "../../config/env.js";
-
+import { getStorageProvider } from "../../common/storage/storage.factory.js";
 const service = new CategoryService();
 
 export class CategoryController {
@@ -24,26 +24,19 @@ export class CategoryController {
     });
   }
 
-  async uploadImage(req: Request, res: Response) {
+ async uploadImage(req: Request, res: Response) {
     const file = req.file as Express.Multer.File | undefined;
     if (!file) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          message: "Image is required",
-          code: "IMAGE_REQUIRED",
-        });
+      res.status(400).json({ success: false, message: "Image is required", code: "IMAGE_REQUIRED" });
       return;
     }
-    const imageUrl = `/${env.uploadDir}/${file.filename}`;
-    const category = await service.setImage(param(req.params.id), imageUrl);
-    res.json({
-      success: true,
-      message: "Image uploaded successfully",
-      data: category,
-    });
+
+    const { key } = await getStorageProvider().upload(file, "categories");
+    const category = await service.setImage(param(req.params.id), key);
+
+    res.json({ success: true, message: "Image uploaded successfully", data: category });
   }
+
 
   async create(req: Request, res: Response) {
     const category = await service.create(req.body);

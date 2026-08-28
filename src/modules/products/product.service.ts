@@ -4,6 +4,7 @@ import { slugify } from "../../common/utils/slug.js";
 import { UserModel } from "../users/user.model.js";
 import { CategoryModel } from "../categories/category.model.js";
 import { socketEvents } from "../../socket/socket.js";
+import { getStorageProvider } from "../../common/storage/storage.factory.js";
 
 interface ProductFilter {
   page?: number;
@@ -67,7 +68,7 @@ export class ProductService {
     ]);
 
     return {
-      items,
+      items: await this.hydrateMany(items),
       total,
       page,
       limit,
@@ -75,43 +76,37 @@ export class ProductService {
     };
   }
 
-  async getById(id: string) {
-    const product = await ProductModel.findById(id).lean();
+async getById(id: string) {
+  const product = await ProductModel.findById(id).lean();
+  if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  return this.hydrate(product);
+}
 
-    if (!product) {
-      throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
-    }
+async getBySlug(slug: string) {
+  const product = await ProductModel.findOne({ slug, isActive: true }).lean();
+  if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  return this.hydrate(product);
+}
 
-    return product;
-  }
+async getFeatured() {
+  const products = await ProductModel.find({ isFeatured: true, isActive: true }).sort({ createdAt: -1 }).lean();
+  return this.hydrateMany(products);
+}
 
-  async getFeatured() {
-    return ProductModel.find({ isFeatured: true, isActive: true })
-      .sort({ createdAt: -1 })
-      .lean();
-  }
-
-  async getBySlug(slug: string) {
-    const product = await ProductModel.findOne({ slug, isActive: true }).lean();
-    if (!product) {
-      throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
-    }
-    return product;
-  }
-
-  async suggest(term: string) {
-    const regex = new RegExp(
-      term.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-      "i",
-    );
-    return ProductModel.find({
-      isActive: true,
-      name: regex,
-    })
-      .select("name slug images price category")
-      .limit(8)
-      .lean();
-  }
+async suggest(term: string) {
+  const regex = new RegExp(
+    term.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    "i",
+  );
+  const products = await ProductModel.find({
+    isActive: true,
+    name: regex,
+  })
+    .select("name slug images price category")
+    .limit(8)
+    .lean();
+  return this.hydrateMany(products);
+}
 
   async addReview(
     id: string,
@@ -151,23 +146,16 @@ export class ProductService {
     product.rating =
       product.reviews.reduce((sum, r) => sum + r.rating, 0) /
       product.reviews.length;
-
-    await product.save();
-    return product;
+  await product.save();
+  return this.hydrate(product.toObject());
   }
-  async removeImage(id: string, imageUrl: string) {
-    const product = await ProductModel.findByIdAndUpdate(
-      id,
-      { $pull: { images: imageUrl } },
-      { new: true },
-    );
-
-    if (!product) {
-      throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
-    }
-    socketEvents.productChanged("updated", product);
-    return product;
-  }
+async removeImage(id: string, imageKey: string) {
+  await getStorageProvider().delete(imageKey);
+  const product = await ProductModel.findByIdAndUpdate(id, { $pull: { images: imageKey } }, { new: true });
+  if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  socketEvents.productChanged("updated", product);
+  return this.hydrate(product);
+}
 
   async getCategories() {
     const activeCategoryNames = await CategoryModel.distinct("name", {
@@ -178,30 +166,22 @@ export class ProductService {
     });
   }
 
-  async create(payload: any) {
-    const slug = payload.slug ? slugify(payload.slug) : slugify(payload.name);
-    const product = await ProductModel.create({
-      ...payload,
-      slug,
-      initialStock: payload.stock ?? 0,
-    });
-    socketEvents.productChanged("created", product);
-    return product;
-  }
+async create(payload: any) {
+  const slug = payload.slug ? slugify(payload.slug) : slugify(payload.name);
+  const product = await ProductModel.create({ ...payload, slug, initialStock: payload.stock ?? 0 });
+  socketEvents.productChanged("created", product);
+  return this.hydrate(product.toObject());
+}
+ async update(id: string, payload: any) {
+  const update = { ...payload };
+  if (update.slug) update.slug = slugify(update.slug);
+  const { initialStock, ...safePayload } = payload;
+  const product = await ProductModel.findByIdAndUpdate(id, safePayload, { new: true, runValidators: true });
+  if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  socketEvents.productChanged("updated", product);
+  return this.hydrate(product.toObject());
+}
 
-  async update(id: string, payload: any) {
-    const update = { ...payload };
-    if (update.slug) update.slug = slugify(update.slug);
-    const { initialStock, ...safePayload } = payload;
-    const product = await ProductModel.findByIdAndUpdate(id, safePayload, {
-      new: true,
-      runValidators: true,
-    });
-    if (!product)
-      throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
-    socketEvents.productChanged("updated", product);
-    return product;
-  }
 
   async delete(id: string) {
     const product = await ProductModel.findByIdAndDelete(id);
@@ -210,19 +190,16 @@ export class ProductService {
     socketEvents.productChanged("deleted", product);
   }
 
-  async addImages(id: string, imageUrls: string[]) {
-    const product = await ProductModel.findByIdAndUpdate(
-      id,
-      { $push: { images: { $each: imageUrls } } },
-      { new: true },
-    );
-
-    if (!product) {
-      throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
-    }
-    socketEvents.productChanged("updated", product);
-    return product;
-  }
+async addImages(id: string, imageKeys: string[]) {
+  const product = await ProductModel.findByIdAndUpdate(
+    id,
+    { $push: { images: { $each: imageKeys } } },
+    { new: true },
+  );
+  if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  socketEvents.productChanged("updated", product);
+  return this.hydrate(product.toObject());
+}
 
   async adjustStock(id: string, delta: number) {
     const product = await ProductModel.findById(id);
@@ -240,4 +217,16 @@ export class ProductService {
 
     return product;
   }
+  private async hydrate<T extends { images?: string[] } | null>(product: T): Promise<T> {
+  if (!product) return product;
+  const storage = getStorageProvider();
+  (product as any).images = await Promise.all(
+    (product.images ?? []).map((key) => storage.getSignedUrl(key)),
+  );
+  return product;
+}
+
+private async hydrateMany<T extends { images?: string[] }>(products: T[]): Promise<T[]> {
+  return Promise.all(products.map((p) => this.hydrate(p)));
+}
 }

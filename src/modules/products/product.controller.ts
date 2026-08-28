@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { ProductService } from "./product.service.js";
 import { env } from "../../config/env.js";
 import { param } from "../../common/utils/params.js";
+import { getStorageProvider } from "../../common/storage/storage.factory.js";
 
 const service = new ProductService();
 interface ProductFilter {
@@ -139,16 +140,18 @@ export class ProductController {
   }
 
   async uploadImages(req: Request, res: Response) {
-    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const storage = getStorageProvider();
 
-    const imageUrls = files.map((file) => `/${env.uploadDir}/${file.filename}`);
+  const uploaded = await Promise.all(files.map((f) => storage.upload(f, "products")));
+  const keys = uploaded.map((u) => u.key);
 
-    const product = await service.addImages(param(req.params.id), imageUrls);
+  const product = await service.addImages(param(req.params.id), keys);
 
-    res.json({
-      success: true,
-      message: "Images uploaded successfully",
-      data: product,
-    });
-  }
+  res.json({
+    success: true,
+    message: "Images uploaded successfully",
+    data: product, 
+  });
+}
 }

@@ -13,9 +13,8 @@ let io: IOServer | null = null;
 export function initSocket(httpServer: HttpServer) {
   io = new IOServer(httpServer, {
     cors: {
-      origin: env.frontendUrl,
-      credentials: true,
-    },
+  origin: "*",
+},
   });
 
   io.use((socket, next) => {

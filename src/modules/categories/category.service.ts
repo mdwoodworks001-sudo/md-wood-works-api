@@ -6,33 +6,34 @@ import { socketEvents } from "../../socket/socket.js";
 import { getStorageProvider } from "../../common/storage/storage.factory.js";
 
 export class CategoryService {
-  async list() {
-    return CategoryModel.find({
-      isActive: true,
-      name: { $not: /^custom$/i },
-    })
-      .sort({ name: 1 })
-      .lean();
-  }
-  async adminList() {
-    return CategoryModel.find().sort({ name: 1 }).lean();
-  }
+async list() {
+  const categories = await CategoryModel.find({
+    isActive: true,
+    name: { $not: /^custom$/i },
+  })
+    .sort({ name: 1 })
+    .lean();
+  return this.hydrate(categories);
+}
 
-  
-  async create(payload: any) {
-    const slug = payload.slug ? slugify(payload.slug) : slugify(payload.name);
-    const category = await CategoryModel.create({ ...payload, slug });
-    socketEvents.categoryChanged("created", category);
-    return category;
-  }
-  
+async adminList() {
+  const categories = await CategoryModel.find().sort({ name: 1 }).lean();
+  return this.hydrate(categories);
+}
+
+async create(payload: any) {
+  const slug = payload.slug ? slugify(payload.slug) : slugify(payload.name);
+  const category = await CategoryModel.create({ ...payload, slug });
+  socketEvents.categoryChanged("created", category);
+  return category;
+}
 
 async setImage(id: string, imageKey: string) {
   const category = await CategoryModel.findByIdAndUpdate(id, { image: imageKey }, { new: true });
   if (!category) throw new AppError("Category not found", 404, "CATEGORY_NOT_FOUND");
   socketEvents.categoryChanged("updated", category);
-  const url = await getStorageProvider().getSignedUrl(imageKey);
-  return { ...category.toObject(), image: url };
+  const [hydrated] = await this.hydrate([category.toObject()]);
+  return hydrated;
 }
 
   async update(id: string, payload: any) {
@@ -75,4 +76,13 @@ async setImage(id: string, imageKey: string) {
     );
     socketEvents.categoryChanged("updated", category);
   }
+  private async hydrate(categories: any[]) {
+  const storage = getStorageProvider();
+  return Promise.all(
+    categories.map(async (c) => ({
+      ...c,
+      image: c.image ? await storage.getSignedUrl(c.image) : c.image,
+    })),
+  );
+}
 }
